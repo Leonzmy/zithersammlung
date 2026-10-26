@@ -7,7 +7,6 @@
 <meta name="theme-color" content="#2C6A64">
 <!-- Barcode-Leser: liegt lokal im Repo (siehe README), sonst vom CDN -->
 <script src="html5-qrcode.min.js"></script>
-<script>window.Html5Qrcode||document.write('<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"><\/script>')</script>
 <style>
 :root{
   --bg:#F2F3EF; --surface:#FFFFFF; --ink:#1D2626; --muted:#5D6866; --line:#D5D9D3;
@@ -90,6 +89,10 @@ button:disabled{opacity:.5;cursor:default}
 .cam .row{margin-top:8px}
 .cam.flash video{opacity:.3}
 @media (prefers-reduced-motion:no-preference){.cam video{transition:opacity .15s}}
+.scanbox{position:relative;overflow:hidden;border-radius:8px}
+.scanbox video{border-radius:0}
+.guide{position:absolute;left:5%;right:5%;top:30%;bottom:30%;border:2px solid var(--brass);border-radius:6px;
+  box-shadow:0 0 0 100vmax rgba(0,0,0,.28);pointer-events:none}
 .scanctl{display:flex;gap:12px;align-items:center;margin-top:8px;max-width:420px}
 .scanctl input[type=range]{flex:1;padding:0;border:0;background:none}
 .scanctl label{margin:0}
@@ -174,7 +177,10 @@ button:disabled{opacity:.5;cursor:default}
       <button class="btn" id="barcodePhotoBtn" type="button">Barcode aus Foto lesen</button>
       <input type="file" id="barcodePhoto" accept="image/*" hidden>
     </div>
-    <div id="reader"></div>
+    <div class="cam" id="scanView" hidden>
+      <div class="scanbox"><video id="scanVideo" playsinline muted autoplay></video><div class="guide"></div></div>
+    </div>
+    <div id="reader" hidden></div>
     <div class="scanctl" id="scanCtl" hidden>
       <label for="zoom" id="zoomLbl" hidden>Zoom</label>
       <input type="range" id="zoom" hidden>
@@ -433,111 +439,148 @@ function checkCode(code){
   } else if(!r) $("codeNote").textContent="Neuer Barcode.";
 }
 function setCode(code){$("barcode").value=code;renderTag();markDirty();checkCode(code)}
-let scanner=null, lastRead="", readCount=0;
-const noReader=()=>{$("codeNote").textContent="Der Barcode-Leser konnte nicht geladen werden. Code bitte eintippen."};
-function SCAN_FORMATS(){
-  if(typeof Html5QrcodeSupportedFormats==="undefined") return null;
-  const F=Html5QrcodeSupportedFormats;
-  const l=[F.CODE_128,F.CODE_39,F.CODE_93,F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.ITF,F.CODABAR,F.QR_CODE,F.DATA_MATRIX].filter(x=>x!==undefined);
-  return l.length?l:null;
-}
+let scanStream=null, scanTimer=null, scanStarting=false, detector=null, fileDecoder=null, decoding=false;
+let lastRead="", readCount=0, torchOn=false;
 const errText=e=>String(e&&(e.message||e.name)||e||"unbekannt").slice(0,160);
+const noReader=()=>{$("codeNote").textContent="Der Barcode-Leser konnte nicht geladen werden. Code bitte eintippen."};
+
+// Barcode-Bibliothek: lokal (html5-qrcode.min.js im Repo) oder bei Bedarf vom CDN
+let libPromise=null;
+function loadLib(){
+  if(window.Html5Qrcode) return Promise.resolve(true);
+  if(!libPromise) libPromise=new Promise(res=>{
+    const sc=document.createElement("script");
+    sc.src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js";
+    sc.onload=()=>res(!!window.Html5Qrcode); sc.onerror=()=>{libPromise=null;res(false)};
+    document.head.appendChild(sc);
+  });
+  return libPromise;
+}
+function libConfig(){
+  const cfg={verbose:false};
+  if(typeof Html5QrcodeSupportedFormats!=="undefined"){
+    const F=Html5QrcodeSupportedFormats;
+    const l=[F.CODE_128,F.CODE_39,F.CODE_93,F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.ITF,F.CODABAR,F.QR_CODE,F.DATA_MATRIX].filter(x=>x!==undefined);
+    if(l.length) cfg.formatsToSupport=l;
+  }
+  return cfg;
+}
+// Schnelle Erkennung über den Browser (Android/Chrome), sonst Bibliothek
+async function makeDetector(){
+  if(!("BarcodeDetector" in window)) return null;
+  try{
+    const sup=await BarcodeDetector.getSupportedFormats();
+    const want=["code_128","code_39","code_93","ean_13","ean_8","upc_a","upc_e","itf","codabar","qr_code","data_matrix"].filter(f=>sup.includes(f));
+    return want.length?new BarcodeDetector({formats:want}):null;
+  }catch(e){return null}
+}
 function beep(){
   try{ navigator.vibrate&&navigator.vibrate(80); }catch(e){}
   try{ const a=new (window.AudioContext||window.webkitAudioContext)(), o=a.createOscillator(), g=a.createGain();
     o.frequency.value=1200; g.gain.value=0.08; o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime+0.12);
     o.onended=()=>a.close(); }catch(e){}
 }
-// Drei Stufen: optimiert → ohne Kameravorgaben → einfache Einstellungen (wie in der ersten Version)
-async function runScanner(level){
-  const cfg={verbose:false};
-  if(level<2){ const f=SCAN_FORMATS(); if(f) cfg.formatsToSupport=f; }
-  cfg.experimentalFeatures={useBarCodeDetectorIfSupported:level<2};
-  scanner=new Html5Qrcode("reader",cfg);
-  const sc= level<2
-    ? {fps:15, qrbox:(w,h)=>({width:Math.max(50,Math.floor(w*0.9)),height:Math.max(50,Math.floor(Math.min(h*0.6,w*0.5)))})}
-    : {fps:10, qrbox:(w,h)=>({width:Math.min(320,w*0.9),height:Math.min(160,h*0.5)})};
-  if(level===0) sc.videoConstraints={facingMode:"environment",width:{ideal:1920},height:{ideal:1080}};
-  await scanner.start({facingMode:"environment"}, sc, onScan, ()=>{});
-}
-let scanStarting=false;
+const gUM=video=>navigator.mediaDevices.getUserMedia({audio:false,video});
+
 async function startScan(){
-  if(scanner||scanStarting) return;
-  if(typeof Html5Qrcode==="undefined") return noReader();
-  scanStarting=true;
-  closeCam(); lastRead=""; readCount=0;
-  $("scanBtn").textContent="Stopp";
-  $("codeNote").textContent="Kamera startet …";
-  let lastErr=null;
-  for(const level of [0,1,2]){
-    try{
-      await runScanner(level);
-      scanStarting=false;
-      try{ setupScanControls(); }catch(e){}
-      $("codeNote").textContent="Code ins Bild halten – wird automatisch erkannt.";
-      $("reader").scrollIntoView({block:"nearest"});
-      return;
-    }catch(e){
-      lastErr=e;
-      try{ if(scanner&&scanner.isScanning) await scanner.stop(); scanner&&scanner.clear(); }catch(_){}
-      scanner=null; $("reader").innerHTML="";
-      // Berechtigung verweigert: weitere Versuche sinnlos
-      if(/NotAllowed|Permission/i.test(errText(e))) break;
+  if(scanStream||scanStarting) return;
+  scanStarting=true; closeCam(); lastRead=""; readCount=0;
+  $("scanBtn").textContent="Stopp"; $("codeNote").textContent="Kamera startet …";
+  try{
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error("Dieser Browser erlaubt keinen Kamerazugriff");
+    try{ scanStream=await gUM({facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}); }
+    catch(e){ if(/NotAllowed|Permission/i.test(errText(e))) throw e; scanStream=await gUM({facingMode:"environment"}); }
+    const v=$("scanVideo"); v.srcObject=scanStream; $("scanView").hidden=false;
+    try{ await v.play(); }catch(e){}
+    detector=await makeDetector();
+    if(!detector){
+      if(!(await loadLib())) throw new Error("Barcode-Leser nicht geladen – Internetverbindung prüfen");
+      if(!fileDecoder) fileDecoder=new Html5Qrcode("reader",libConfig());
     }
-  }
-  scanStarting=false;
-  $("scanBtn").textContent="Scannen";
-  $("codeNote").textContent="Kamera konnte nicht gestartet werden ("+errText(lastErr)+"). Kamerazugriff im Browser erlauben oder „Barcode aus Foto lesen“ nutzen.";
+    if(!scanStream) return;               // in der Zwischenzeit gestoppt
+    setupScanControls();
+    $("codeNote").textContent="Code in den Rahmen halten – wird automatisch erkannt.";
+    $("scanView").scrollIntoView({block:"nearest"});
+    scanLoop();
+  }catch(e){
+    stopScan();
+    $("codeNote").textContent="Kamera konnte nicht gestartet werden ("+errText(e)+"). Kamerazugriff im Browser erlauben oder „Barcode aus Foto lesen“ nutzen.";
+  }finally{ scanStarting=false; }
 }
-async function onScan(text, result){
+// Ausschnitt im Rahmen als Bild, für die Bibliothek
+function grabFrame(v){
+  const sx=v.videoWidth*0.05, sy=v.videoHeight*0.3, sw=v.videoWidth*0.9, sh=v.videoHeight*0.4;
+  const sc=Math.min(1,1280/sw);
+  const c=document.createElement("canvas"); c.width=Math.round(sw*sc); c.height=Math.round(sh*sc);
+  c.getContext("2d").drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
+  return new Promise(r=>c.toBlob(r,"image/jpeg",0.9));
+}
+async function scanLoop(){
+  if(!scanStream) return;
+  const v=$("scanVideo");
+  if(v.videoWidth && !decoding){
+    decoding=true;
+    try{
+      let text=null, fmt="";
+      if(detector){
+        const r=await detector.detect(v);
+        if(r.length){ text=r[0].rawValue; fmt=r[0].format; }
+      }else{
+        const blob=await grabFrame(v);
+        if(blob){ try{ text=await fileDecoder.scanFile(new File([blob],"frame.jpg",{type:"image/jpeg"}),false); }catch(_){} }
+      }
+      if(text&&scanStream) handleRead(text,fmt);
+    }catch(e){}
+    decoding=false;
+  }
+  if(scanStream) scanTimer=setTimeout(scanLoop, detector?80:120);
+}
+function handleRead(text,fmt){
   text=String(text).trim(); if(!text) return;
   // Strichcodes zweimal gleich lesen, um Fehllesungen auszuschließen; QR/DataMatrix sind fehlergesichert
-  let fmt=""; try{ fmt=String(result.result.format.formatName||""); }catch(e){}
-  const twoD=/QR|MATRIX/i.test(fmt);
   readCount=text===lastRead?readCount+1:1; lastRead=text;
-  if(readCount<2 && !twoD) return;
-  beep(); await stopScan(); setCode(text);
+  if(readCount<2 && !/qr|matrix/i.test(fmt)) return;
+  beep(); stopScan(); setCode(text);
 }
+function scanTrack(){ return scanStream&&scanStream.getVideoTracks()[0] }
+function trackSet(c){ const t=scanTrack(); if(t&&t.applyConstraints) t.applyConstraints({advanced:[c]}).catch(()=>{}); }
 function setupScanControls(){
-  let caps={};
-  try{ caps=scanner.getRunningTrackCapabilities()||{}; }catch(e){}
-  try{ scanner.applyVideoConstraints({advanced:[{focusMode:"continuous"}]}).catch(()=>{}); }catch(e){}
+  const t=scanTrack(); let caps={};
+  try{ caps=(t&&t.getCapabilities&&t.getCapabilities())||{}; }catch(e){}
+  if(caps.focusMode&&caps.focusMode.includes&&caps.focusMode.includes("continuous")) trackSet({focusMode:"continuous"});
   const z=$("zoom");
   if(caps.zoom && caps.zoom.max>caps.zoom.min){
     z.min=caps.zoom.min; z.max=Math.min(caps.zoom.max,8); z.step=caps.zoom.step||0.1;
     const saved=+store.get("zi.zoom");
-    z.value=saved&&saved>=caps.zoom.min&&saved<=z.max?saved:Math.min(2,z.max);
+    z.value=saved&&saved>=caps.zoom.min&&saved<=+z.max?saved:Math.min(2,+z.max);
     applyZoom(); z.hidden=false; $("zoomLbl").hidden=false;
   } else { z.hidden=true; $("zoomLbl").hidden=true; }
-  $("torchBtn").hidden=!caps.torch; $("torchBtn").textContent="Licht an"; torchOn=false;
+  torchOn=false; $("torchBtn").hidden=!caps.torch; $("torchBtn").textContent="Licht an";
   $("scanCtl").hidden=!(caps.torch||!z.hidden);
 }
-let torchOn=false;
-function applyZoom(){ if(!scanner) return; try{ scanner.applyVideoConstraints({advanced:[{zoom:+$("zoom").value}]}).catch(()=>{}); store.set("zi.zoom",$("zoom").value);}catch(e){} }
+function applyZoom(){ trackSet({zoom:+$("zoom").value}); store.set("zi.zoom",$("zoom").value); }
 $("zoom").addEventListener("input",applyZoom);
 $("torchBtn").addEventListener("click",()=>{
-  if(!scanner) return; torchOn=!torchOn;
-  try{ scanner.applyVideoConstraints({advanced:[{torch:torchOn}]}).catch(()=>{}); }catch(e){}
-  $("torchBtn").textContent=torchOn?"Licht aus":"Licht an";
+  torchOn=!torchOn; trackSet({torch:torchOn}); $("torchBtn").textContent=torchOn?"Licht aus":"Licht an";
 });
-$("scanBtn").addEventListener("click",()=>(scanner||scanStarting)?stopScan():startScan());
+function stopScan(){
+  clearTimeout(scanTimer); scanTimer=null;
+  if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
+  $("scanVideo").srcObject=null; $("scanView").hidden=true;
+  $("scanBtn").textContent="Scannen"; $("scanCtl").hidden=true;
+}
+$("scanBtn").addEventListener("click",()=>(scanStream||scanStarting)?stopScan():startScan());
 $("autoScan").checked=store.get("zi.autoscan")!=="0";
 $("autoScan").addEventListener("change",()=>store.set("zi.autoscan",$("autoScan").checked?"1":"0"));
-async function stopScan(){
-  if(!scanner) return;
-  try{ if(scanner.isScanning) await scanner.stop(); scanner.clear(); }catch(e){}
-  scanner=null; $("reader").innerHTML=""; $("scanBtn").textContent="Scannen"; $("scanCtl").hidden=true;
-}
+
 $("barcodePhotoBtn").addEventListener("click",()=>$("barcodePhoto").click());
 $("barcodePhoto").addEventListener("change",async e=>{
   const file=e.target.files[0]; e.target.value=""; if(!file) return;
-  if(typeof Html5Qrcode==="undefined") return noReader();
   $("codeNote").textContent="Lese Barcode …";
-  const fcfg={verbose:false}; const ff=SCAN_FORMATS(); if(ff) fcfg.formatsToSupport=ff;
-  const s=new Html5Qrcode("reader",fcfg);
-  try{ setCode(await s.scanFile(file,false)); }
+  if(!(await loadLib())) return noReader();
+  if(!fileDecoder) fileDecoder=new Html5Qrcode("reader",libConfig());
+  try{ setCode(await fileDecoder.scanFile(file,false)); }
   catch(err){ $("codeNote").textContent="Im Foto wurde kein Barcode erkannt. Näher und gerade fotografieren oder Code eintippen."; }
-  finally{ try{s.clear()}catch(_){} $("reader").innerHTML=""; }
 });
 
 /* ================= Fotos ================= */
