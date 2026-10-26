@@ -85,6 +85,11 @@ button:disabled{opacity:.5;cursor:default}
 .flag:empty{display:none}
 .note{padding:10px 12px;border-radius:8px;background:var(--filled);margin:10px 0 0;font-size:.95rem}
 .note:empty{display:none}
+.cam{margin-top:10px;max-width:560px}
+.cam video{width:100%;border-radius:8px;background:#000;display:block}
+.cam .row{margin-top:8px}
+.cam.flash video{opacity:.3}
+@media (prefers-reduced-motion:no-preference){.cam video{transition:opacity .15s}}
 #reader{margin-top:10px;max-width:420px;border-radius:8px;overflow:hidden}
 #reader:empty{display:none}
 .photos{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
@@ -162,8 +167,8 @@ button:disabled{opacity:.5;cursor:default}
     </div>
     <p class="hint">Ein Handscanner tippt den Code direkt ins Feld. Ohne Live-Kamera: Foto vom Barcode wählen.</p>
     <div class="row" style="margin-top:8px">
-      <label class="btn" for="barcodePhoto" style="margin:0;color:var(--ink);font-size:1rem">Barcode aus Foto lesen</label>
-      <input type="file" id="barcodePhoto" accept="image/*" capture="environment" hidden>
+      <button class="btn" id="barcodePhotoBtn" type="button">Barcode aus Foto lesen</button>
+      <input type="file" id="barcodePhoto" accept="image/*" hidden>
     </div>
     <div id="reader"></div>
     <div class="note" id="codeNote"></div>
@@ -181,8 +186,18 @@ button:disabled{opacity:.5;cursor:default}
 
   <section>
     <h2>Fotos</h2>
-    <label class="btn" for="photoInput" style="display:inline-block;color:var(--ink);font-size:1rem">Foto hinzufügen</label>
-    <input type="file" id="photoInput" accept="image/*" capture="environment" multiple hidden>
+    <div class="row" style="flex-wrap:wrap">
+      <button class="btn primary" id="camBtn" type="button">Kamera öffnen</button>
+      <button class="btn" id="galleryBtn" type="button">Aus Galerie wählen</button>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" multiple hidden>
+    <div class="cam" id="cam" hidden>
+      <video id="camVideo" playsinline muted autoplay></video>
+      <div class="row">
+        <button class="btn primary" id="shotBtn" type="button">Auslösen</button>
+        <button class="btn" id="camClose" type="button">Kamera schließen</button>
+      </div>
+    </div>
     <p class="hint" id="photoHint">Fotos werden verkleinert und mit der Zither gespeichert.</p>
     <div class="photos" id="photos"></div>
   </section>
@@ -412,6 +427,7 @@ const noReader=()=>{$("codeNote").textContent="Der Barcode-Leser konnte nicht ge
 $("scanBtn").addEventListener("click",async()=>{
   if(scanner){await stopScan();return}
   if(typeof Html5Qrcode==="undefined") return noReader();
+  closeCam();
   scanner=new Html5Qrcode("reader",{verbose:false,experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
   $("scanBtn").textContent="Stopp";
   try{
@@ -427,6 +443,7 @@ async function stopScan(){
   try{ if(scanner.isScanning) await scanner.stop(); scanner.clear(); }catch(e){}
   scanner=null; $("reader").innerHTML=""; $("scanBtn").textContent="Kamera";
 }
+$("barcodePhotoBtn").addEventListener("click",()=>$("barcodePhoto").click());
 $("barcodePhoto").addEventListener("change",async e=>{
   const file=e.target.files[0]; e.target.value=""; if(!file) return;
   if(typeof Html5Qrcode==="undefined") return noReader();
@@ -460,20 +477,61 @@ async function shrink(file){
   c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
   return c.toDataURL("image/jpeg",0.82);
 }
+let uploads=0;
+async function uploadDataUrl(dataUrl){
+  if(!connected){$("photoHint").textContent="Keine Verbindung zur Tabelle – Fotos können nicht hochgeladen werden. Reiter „Verbindung“ prüfen.";return}
+  uploads++; $("photoHint").textContent=uploads>1?`Lade ${uploads} Fotos hoch …`:"Lade Foto hoch …";
+  try{
+    const code=$("barcode").value.trim()||"ohne-barcode";
+    const res=await apiPost({action:"upload",mime:"image/jpeg",name:`${code}_${Date.now()}.jpg`,data:dataUrl.split(",")[1]});
+    if(!res.id) throw new Error("keine Datei-ID erhalten");
+    photoCache[res.id]=dataUrl; current.fotos.push({id:res.id,src:dataUrl});
+    renderPhotos(); markDirty();
+    $("photoHint").textContent="Foto hochgeladen. Zum Zuordnen „Speichern“ tippen.";
+  }catch(err){ $("photoHint").textContent="Foto konnte nicht hochgeladen werden: "+(err.message||err); }
+  finally{ uploads--; }
+}
+$("galleryBtn").addEventListener("click",()=>$("photoInput").click());
 $("photoInput").addEventListener("change",async e=>{
   const files=[...e.target.files]; e.target.value="";
-  if(!connected){$("photoHint").textContent="Keine Verbindung zur Tabelle – Fotos können nicht hochgeladen werden.";return}
   for(const f of files){
-    $("photoHint").textContent="Lade Foto hoch …";
-    try{
-      const dataUrl=await shrink(f);
-      const code=$("barcode").value.trim()||"ohne-barcode";
-      const res=await apiPost({action:"upload",mime:"image/jpeg",name:`${code}_${Date.now()}.jpg`,data:dataUrl.split(",")[1]});
-      photoCache[res.id]=dataUrl; current.fotos.push({id:res.id,src:dataUrl});
-      renderPhotos(); markDirty();
-      $("photoHint").textContent="Foto hochgeladen. Zum Zuordnen „Speichern“ tippen.";
-    }catch(err){ $("photoHint").textContent="Foto konnte nicht hochgeladen werden: "+(err.message||err); }
+    let dataUrl;
+    try{ dataUrl=await shrink(f); }catch(err){ $("photoHint").textContent="Dieses Bildformat kann der Browser nicht lesen."; continue; }
+    await uploadDataUrl(dataUrl);
   }
+});
+
+/* Fotokamera im Browser */
+let camStream=null;
+async function openCam(){
+  await stopScan();
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    $("photoHint").textContent="Dieser Browser erlaubt keinen Kamerazugriff. „Aus Galerie wählen“ nutzen."; return;
+  }
+  try{
+    camStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1440}}});
+    const v=$("camVideo"); v.srcObject=camStream;
+    $("cam").hidden=false; $("camBtn").textContent="Kamera schließen";
+    await v.play();
+    $("cam").scrollIntoView({block:"nearest"});
+  }catch(err){
+    closeCam();
+    $("photoHint").textContent="Kamera nicht verfügbar oder nicht erlaubt. Kamerazugriff im Browser freigeben oder „Aus Galerie wählen“ nutzen.";
+  }
+}
+function closeCam(){
+  if(camStream){camStream.getTracks().forEach(t=>t.stop()); camStream=null}
+  $("camVideo").srcObject=null; $("cam").hidden=true; $("camBtn").textContent="Kamera öffnen";
+}
+$("camBtn").addEventListener("click",()=>camStream?closeCam():openCam());
+$("camClose").addEventListener("click",closeCam);
+$("shotBtn").addEventListener("click",()=>{
+  const v=$("camVideo"); if(!v.videoWidth) return;
+  const sc=Math.min(1,1600/Math.max(v.videoWidth,v.videoHeight));
+  const c=document.createElement("canvas"); c.width=Math.round(v.videoWidth*sc); c.height=Math.round(v.videoHeight*sc);
+  c.getContext("2d").drawImage(v,0,0,c.width,c.height);
+  $("cam").classList.add("flash"); setTimeout(()=>$("cam").classList.remove("flash"),150);
+  uploadDataUrl(c.toDataURL("image/jpeg",0.82));
 });
 
 /* ================= Laden, Speichern, Löschen ================= */
@@ -535,6 +593,7 @@ function showTab(t){
     $("view-"+n).hidden=n!==t; $("tab-"+n).setAttribute("aria-selected",n===t);
   });
   $("savebar").hidden=t!=="erfassen";
+  if(t!=="erfassen"){closeCam(); stopScan();}
   if(t==="bestand") renderList();
 }
 ["erfassen","bestand","setup"].forEach(n=>$("tab-"+n).addEventListener("click",()=>showTab(n)));
