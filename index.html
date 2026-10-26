@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zitherinventar</title>
+<meta name="theme-color" content="#2C6A64">
+<!-- Barcode-Leser: liegt lokal im Repo (siehe README), sonst vom CDN -->
+<script src="html5-qrcode.min.js"></script>
+<script>window.Html5Qrcode||document.write('<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"><\/script>')</script>
+<style>
+:root{
+  --bg:#F2F3EF; --surface:#FFFFFF; --ink:#1D2626; --muted:#5D6866; --line:#D5D9D3;
+  --accent:#2C6A64; --accent-ink:#FFFFFF; --brass:#9C7A33; --flag:#FFF1C2; --flag-line:#D9B44A;
+  --danger:#A23B2C; --filled:#E7F0EE;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#151A1A; --surface:#1E2525; --ink:#E8ECE9; --muted:#9AA5A2; --line:#34403E;
+    --accent:#6FB3AA; --accent-ink:#0F1515; --brass:#D2AE62; --flag:#3A3418; --flag-line:#8C7633;
+    --danger:#E07A6A; --filled:#233230; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#151A1A; --surface:#1E2525; --ink:#E8ECE9; --muted:#9AA5A2; --line:#34403E;
+  --accent:#6FB3AA; --accent-ink:#0F1515; --brass:#D2AE62; --flag:#3A3418; --flag-line:#8C7633;
+  --danger:#E07A6A; --filled:#233230; color-scheme:dark;
+}
+html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + 64px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:17px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.bar{max-width:760px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}
+.bar h1{font-size:1.15rem;margin:0;flex:1}
+.tabs{display:flex;gap:4px}
+.tabs button{border:0;background:none;color:var(--muted);font:inherit;padding:8px 12px;border-radius:8px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--filled);color:var(--ink);font-weight:700}
+main{max-width:760px;margin:0 auto;padding:16px 16px 120px}
+.status{font-size:.9rem;color:var(--muted);margin:0 0 12px}
+.status.warn{color:var(--danger)}
+section{margin:0 0 28px}
+h2{font-size:1rem;margin:0 0 8px}
+.hint{font-size:.9rem;color:var(--muted);margin:4px 0 0}
+label{display:block;font-size:.9rem;color:var(--muted);margin:0 0 4px}
+input,select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+textarea{min-height:64px;resize:vertical}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.from-old{background:var(--filled)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px}
+.grid .wide{grid-column:1 / -1}
+@media (max-width:520px){.grid{grid-template-columns:1fr}}
+.row{display:flex;gap:8px}
+.row input{flex:1}
+button.btn{font:inherit;border-radius:8px;padding:10px 14px;cursor:pointer;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink);white-space:nowrap}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+button.danger{color:var(--danger)}
+button:disabled{opacity:.5;cursor:default}
+
+/* Das Etikett: alte Signatur und Barcode als Regalschild */
+.tag{border:2px solid var(--brass);border-radius:6px 22px 22px 6px;padding:14px 18px;margin:0 0 24px;
+  display:flex;align-items:center;gap:18px;background:var(--surface);position:relative}
+.tag::before{content:"";width:12px;height:12px;border-radius:50%;border:2px solid var(--brass);flex:none}
+.tag .sig{font-size:2.4rem;font-weight:700;line-height:1;letter-spacing:.02em}
+.tag .code{font-size:1.05rem;color:var(--muted);overflow-wrap:anywhere}
+.tag .code strong{color:var(--ink)}
+.tag .empty{color:var(--muted)}
+
+.results{list-style:none;margin:8px 0 0;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.results:empty{display:none}
+.results li button{display:grid;grid-template-columns:5.5rem 3.5rem 1fr;gap:8px;width:100%;text-align:left;
+  font:inherit;background:var(--surface);color:var(--ink);border:0;border-bottom:1px solid var(--line);padding:10px 12px;cursor:pointer}
+.results li:last-child button{border-bottom:0}
+.results .s{font-weight:700}.results .n{color:var(--muted)}
+.results .done{color:var(--accent);font-size:.85rem}
+.flag{background:var(--flag);border-left:4px solid var(--flag-line);padding:10px 12px;border-radius:4px;margin:12px 0 0;font-size:.95rem}
+.flag:empty{display:none}
+.note{padding:10px 12px;border-radius:8px;background:var(--filled);margin:10px 0 0;font-size:.95rem}
+.note:empty{display:none}
+#reader{margin-top:10px;max-width:420px;border-radius:8px;overflow:hidden}
+#reader:empty{display:none}
+.photos{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+.photos figure{margin:0;position:relative}
+.photos img{width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block}
+.photos button{position:absolute;top:4px;right:4px;border:0;border-radius:50%;width:28px;height:28px;
+  background:var(--surface);color:var(--danger);cursor:pointer;font-size:1rem;line-height:1}
+.savebar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom,0px);z-index:5}
+.savebar .in{max-width:760px;margin:0 auto;display:flex;gap:10px;align-items:center;padding:10px 16px}
+.savebar .msg{flex:1;font-size:.9rem;color:var(--muted)}
+.list{list-style:none;padding:0;margin:0}
+.list li button{display:flex;gap:12px;width:100%;text-align:left;font:inherit;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;padding:10px;margin:0 0 8px;cursor:pointer;align-items:center}
+.list img,.list .ph{width:56px;height:56px;object-fit:cover;border-radius:6px;flex:none;background:var(--filled)}
+.list .t{font-weight:700}.list .m{color:var(--muted);font-size:.9rem}
+.progress{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:6px 0 4px}
+.progress span{display:block;height:100%;background:var(--accent)}
+.filters{display:flex;gap:8px;margin:12px 0}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:no-preference){.tag{transition:border-color .2s}}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Zitherinventar</h1>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="tab-erfassen" aria-selected="true">Erfassen</button>
+      <button role="tab" id="tab-bestand" aria-selected="false">Bestand</button>
+      <button role="tab" id="tab-setup" aria-selected="false">Verbindung</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+<p class="status" id="status">Verbinde mit der Tabelle …</p>
+
+<div id="view-setup" hidden>
+  <section>
+    <h2>Verbindung zur Google-Tabelle</h2>
+    <p class="hint" style="margin-bottom:14px">Beide Angaben stehen nach der Einrichtung im Apps-Script-Projekt (siehe README). Sie werden nur in diesem Browser gespeichert.</p>
+    <div class="grid">
+      <div class="wide"><label for="cfgUrl">Web-App-URL</label><input id="cfgUrl" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></div>
+      <div class="wide"><label for="cfgToken">Schlüssel</label><input id="cfgToken" autocomplete="off"></div>
+    </div>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="cfgSave" type="button">Verbinden</button><button class="btn" id="reloadBtn" type="button">Daten neu laden</button></div>
+    <p class="hint" id="cfgMsg"></p>
+  </section>
+</div>
+
+<div id="view-erfassen">
+  <div class="tag" aria-live="polite">
+    <div class="sig" id="tagSig"><span class="empty">–</span></div>
+    <div class="code" id="tagCode">Noch kein Barcode</div>
+  </div>
+
+  <section>
+    <h2>Alte Signatur</h2>
+    <div class="row">
+      <input id="lookup" placeholder="z. B. E4A oder #23 für die laufende Nr." autocomplete="off" autocapitalize="characters">
+      <button class="btn" id="noOld" type="button">Ohne alte Signatur</button>
+    </div>
+    <p class="hint">Felder aus der alten Liste werden ausgefüllt und farbig hinterlegt. Alles bleibt editierbar.</p>
+    <ul class="results" id="results"></ul>
+    <div class="note" id="oldNote"></div>
+    <div class="flag" id="flag"></div>
+  </section>
+
+  <section>
+    <h2>Barcode</h2>
+    <div class="row">
+      <input id="barcode" placeholder="Scannen oder eintippen" autocomplete="off" inputmode="text">
+      <button class="btn" id="scanBtn" type="button">Kamera</button>
+    </div>
+    <p class="hint">Ein Handscanner tippt den Code direkt ins Feld. Ohne Live-Kamera: Foto vom Barcode wählen.</p>
+    <div class="row" style="margin-top:8px">
+      <label class="btn" for="barcodePhoto" style="margin:0;color:var(--ink);font-size:1rem">Barcode aus Foto lesen</label>
+      <input type="file" id="barcodePhoto" accept="image/*" capture="environment" hidden>
+    </div>
+    <div id="reader"></div>
+    <div class="note" id="codeNote"></div>
+  </section>
+
+  <section>
+    <h2>Angaben</h2>
+    <div class="grid" id="mainFields"></div>
+  </section>
+
+  <section>
+    <h2>Aus der alten Liste</h2>
+    <div class="grid" id="oldFields"></div>
+  </section>
+
+  <section>
+    <h2>Fotos</h2>
+    <label class="btn" for="photoInput" style="display:inline-block;color:var(--ink);font-size:1rem">Foto hinzufügen</label>
+    <input type="file" id="photoInput" accept="image/*" capture="environment" multiple hidden>
+    <p class="hint" id="photoHint">Fotos werden verkleinert und mit der Zither gespeichert.</p>
+    <div class="photos" id="photos"></div>
+  </section>
+
+  <section>
+    <button class="btn danger" id="deleteBtn" type="button" hidden>Eintrag löschen</button>
+  </section>
+</div>
+
+<div id="view-bestand" hidden>
+  <section>
+    <h2 id="progressLabel">Fortschritt</h2>
+    <div class="progress"><span id="progressBar" style="width:0"></span></div>
+    <p class="hint" id="progressText"></p>
+  </section>
+  <input id="search" placeholder="Suchen: Signatur, Barcode, Hersteller, Gattung" autocomplete="off">
+  <div class="filters">
+    <button class="btn" id="fDone" type="button" aria-pressed="true">Erfasst</button>
+    <button class="btn" id="fOpen" type="button" aria-pressed="false">Noch offen</button>
+    <span style="flex:1"></span>
+    <button class="btn" id="exportBtn" type="button">CSV exportieren</button>
+  </div>
+  <ul class="list" id="list"></ul>
+</div>
+</main>
+
+<div class="savebar" id="savebar">
+  <div class="in">
+    <span class="msg" id="saveMsg">Neue Erfassung</span>
+    <button class="btn" id="newBtn" type="button">Neu</button>
+    <button class="btn primary" id="saveBtn" type="button">Speichern</button>
+  </div>
+</div>
+
+<script>
+/* ================= Konfiguration ================= */
+// Optional fest eintragen; sonst über den Reiter „Verbindung“ setzen.
+const DEFAULT_API_URL = "";
+
+const MAIN = [
+  {k:"hersteller", l:"Hersteller", wide:true},
+  {k:"fabriknummer", l:"Fabriknummer"},
+  {k:"baujahr", l:"Baujahr"},
+  {k:"gattung", l:"Gattung", list:"gattungen"},
+  {k:"mensur", l:"Mensur (cm)"},
+  {k:"zustand", l:"Zustand", list:"zustaende"},
+  {k:"saiten", l:"Zustand der Saiten", list:"saitenzust"},
+  {k:"koffer", l:"Koffer", list:"koffer"},
+  {k:"beschaedigungen", l:"Beschädigungen", area:true, wide:true},
+  {k:"klang", l:"Wie findet Sarah den Klang?", area:true, wide:true},
+  {k:"besonderheiten", l:"Besonderheiten und Sonstiges", area:true, wide:true}
+];
+const OLD = [
+  {k:"altSig", l:"Alte Signatur"},
+  {k:"lfd", l:"Lfd. Nr. (alt)"},
+  {k:"regal", l:"Regal-Nr."},
+  {k:"regalort", l:"Regalort"},
+  {k:"kaufwert", l:"Kaufwert (DM)"},
+  {k:"wert", l:"Tatsächlicher Wert (DM)"},
+  {k:"verkauf", l:"Verkauf"}
+];
+const LISTS = {
+  gattungen:["Quint-Zither","Einfach-Zither","Spezial-Kurz-Zither","Diskant-Zither","Geigenhals-Zither","Karas-Zither","Konzert-Zither","Harfen-Zither","Arion-Zither","Arion-Harfen-Zither","Perfekta-Zither","Reform-Harfen-Zither","Zwischen-Zither","Alt-Zither","Elegie-Zither","Elegie-Spezial-Perfekta-Zither","Diagonal-Zither","Schoß-Zither","Streich-Zither","Ungarische Zither","Knopf-Zither","Hummel-Patent-Zither","Spezial-Köppl-Umbau-Zither","Stahlrahmen-Zither","Adler-Zither","Bass-Zither","Contrabasszither","Doppelbodenzither","Sonderzither","Violin-Harfe","Konzert-Violin-Harfe","Accord-Zither","Mandolinetta","Arion-Alt-Zither","Arion-Stahl-Zither","Gebirgszither"],
+  zustaende:["neu","gut","mittel","schlecht"],
+  saitenzust:["neu","alt","kaputt","fehlen"],
+  koffer:["ja","nein","Koffer defekt"]
+};
+const FROM_OLD_KEYS = ["altSig","lfd","regal","regalort","kaufwert","wert","verkauf","hersteller","fabriknummer","baujahr","gattung","mensur","zustand","saiten","beschaedigungen","besonderheiten"];
+
+let oldRows=[], records={};               // records: barcode -> Datensatz
+let current={code:null, fotos:[]};        // fotos: [{id, src?}]
+let dirty=false, filterMode="done", connected=false;
+const photoCache={};
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm=s=>String(s||"").toUpperCase().replace(/\(\?\)/g,"").replace(/[\s.\-_]/g,"");
+
+/* ================= Verbindung (Apps Script) ================= */
+const store={
+  get(k){try{return localStorage.getItem(k)||""}catch(e){return ""}},
+  set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+};
+const cfg=()=>({url:store.get("zi.url")||DEFAULT_API_URL, token:store.get("zi.token")});
+
+async function apiGet(params){
+  const {url,token}=cfg();
+  const q=new URLSearchParams({...params,token});
+  const res=await fetch(url+"?"+q.toString());
+  const data=await res.json();
+  if(data.error) throw new Error(data.error);
+  return data;
+}
+async function apiPost(body){
+  const {url,token}=cfg();
+  // text/plain vermeidet den CORS-Preflight, den Apps Script nicht beantwortet
+  const res=await fetch(url,{method:"POST",body:JSON.stringify({...body,token})});
+  const data=await res.json();
+  if(data.error && !data.conflict) throw new Error(data.error);
+  return data;
+}
+function setStatus(t,warn){$("status").textContent=t;$("status").classList.toggle("warn",!!warn)}
+
+async function loadAll(){
+  const {url,token}=cfg();
+  if(!url||!token){connected=false;setStatus("Noch nicht verbunden. Im Reiter „Verbindung“ URL und Schlüssel eintragen.",true);showTab("setup");return}
+  setStatus("Lade Daten …");
+  try{
+    const data=await apiGet({action:"list"});
+    oldRows=data.old||[];
+    records={}; (data.records||[]).forEach(r=>records[r.barcode]=r);
+    connected=true;
+    setStatus(`Verbunden: ${oldRows.length} Einträge in der alten Liste, ${Object.keys(records).length} erfasst. Stand ${new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}.`);
+    if(!$("view-bestand").hidden) renderList();
+  }catch(err){
+    connected=false;
+    setStatus("Verbindung fehlgeschlagen: "+(err.message||err)+" Prüfe URL und Schlüssel im Reiter „Verbindung“.",true);
+  }
+}
+$("cfgUrl").value=cfg().url; $("cfgToken").value=cfg().token;
+$("cfgSave").addEventListener("click",async()=>{
+  store.set("zi.url",$("cfgUrl").value.trim()); store.set("zi.token",$("cfgToken").value.trim());
+  $("cfgMsg").textContent="Verbinde …"; await loadAll();
+  $("cfgMsg").textContent=connected?"Verbunden.":"Keine Verbindung. Angaben prüfen.";
+  if(connected) showTab("erfassen");
+});
+$("reloadBtn").addEventListener("click",loadAll);
+
+/* ================= Formular ================= */
+for (const [name,opts] of Object.entries(LISTS)){
+  const dl=document.createElement("datalist"); dl.id=name;
+  dl.innerHTML=opts.map(o=>`<option value="${esc(o)}">`).join(""); document.body.appendChild(dl);
+}
+function buildFields(defs, host){
+  host.innerHTML=defs.map(f=>`<div class="${f.wide?"wide":""}"><label for="f-${f.k}">${esc(f.l)}</label>${
+    f.area?`<textarea id="f-${f.k}" data-k="${f.k}"></textarea>`
+          :`<input id="f-${f.k}" data-k="${f.k}" ${f.list?`list="${f.list}"`:""} autocomplete="off">`}</div>`).join("");
+}
+buildFields(MAIN,$("mainFields")); buildFields(OLD,$("oldFields"));
+document.querySelectorAll("[data-k]").forEach(el=>el.addEventListener("input",()=>{
+  el.classList.remove("from-old"); markDirty(); if(el.dataset.k==="altSig") renderTag();
+}));
+const field=k=>document.querySelector(`[data-k="${k}"]`);
+function readForm(){const d={};document.querySelectorAll("[data-k]").forEach(el=>d[el.dataset.k]=el.value.trim());return d}
+function writeForm(d, markOld){
+  document.querySelectorAll("[data-k]").forEach(el=>{
+    const v=d[el.dataset.k]; el.value=v==null?"":String(v);
+    el.classList.toggle("from-old", !!markOld && el.value!=="" && FROM_OLD_KEYS.includes(el.dataset.k));
+  });
+}
+function markDirty(){dirty=true; $("saveMsg").textContent="Ungespeicherte Änderungen"}
+
+function renderTag(){
+  const sig=field("altSig").value.trim();
+  $("tagSig").innerHTML=sig?esc(sig):'<span class="empty">–</span>';
+  const code=$("barcode").value.trim();
+  $("tagCode").innerHTML=code?`Barcode <strong>${esc(code)}</strong>`:"Noch kein Barcode";
+}
+
+/* ================= Alte Liste durchsuchen ================= */
+const recordForLfd=lfd=>Object.values(records).find(r=>r.lfd&&String(r.lfd)===String(lfd));
+function search(q){
+  q=q.trim(); if(!q) return [];
+  const byNum=q.match(/^#\s*(\d+)$/);
+  if(byNum) return oldRows.filter(r=>String(r.lfd)===byNum[1]);
+  const n=norm(q);
+  const exact=oldRows.filter(r=>r.sig&&norm(r.sig)===n);
+  const pre=oldRows.filter(r=>r.sig&&norm(r.sig).startsWith(n)&&!exact.includes(r));
+  const num=/^\d+$/.test(q)?oldRows.filter(r=>String(r.lfd)===q):[];
+  return [...exact,...pre,...num].slice(0,12);
+}
+$("lookup").addEventListener("input",()=>renderResults(search($("lookup").value)));
+$("lookup").addEventListener("keydown",e=>{
+  if(e.key!=="Enter") return;
+  const res=search($("lookup").value);
+  if(res.length===1) pickOld(res[0]); else renderResults(res,true);
+});
+function renderResults(res, showEmpty){
+  const ul=$("results");
+  if(!res.length){ul.innerHTML=showEmpty?`<li><button type="button" disabled><span class="s">–</span><span></span><span>Nicht in der alten Liste gefunden</span></button></li>`:"";return}
+  ul.innerHTML=res.map((r,i)=>{
+    const done=recordForLfd(r.lfd);
+    return `<li><button type="button" data-i="${i}"><span class="s">${esc(r.sig||"ohne")}</span><span class="n">Nr. ${esc(r.lfd)}</span><span>${esc(r.hersteller||"ohne Herstellerangabe")}${done?` <span class="done">erfasst</span>`:""}</span></button></li>`;
+  }).join("");
+  ul.querySelectorAll("button[data-i]").forEach(b=>b.addEventListener("click",()=>pickOld(res[+b.dataset.i])));
+}
+function pickOld(r){
+  $("results").innerHTML="";
+  const existing=recordForLfd(r.lfd);
+  if(existing && existing.barcode!==current.code){
+    if(confirm(`Nr. ${r.lfd} ist bereits mit Barcode ${existing.barcode} erfasst. Diesen Eintrag öffnen?`)){loadRecord(existing.barcode);return}
+  }
+  if(dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+  const keepCode=$("barcode").value, prev=readForm();
+  const d={altSig:r.sig, lfd:r.lfd, regal:r.regal, regalort:r.regalort, kaufwert:r.kaufwert, wert:r.wert,
+    verkauf:r.verkauf, hersteller:r.hersteller, fabriknummer:r.fabriknummer, baujahr:r.baujahr, gattung:r.gattung,
+    mensur:r.mensur, zustand:r.zustand, saiten:r.saiten, beschaedigungen:r.beschaedigungen, besonderheiten:r.besonderheiten,
+    koffer:prev.koffer, klang:prev.klang};
+  writeForm(d,true);
+  $("barcode").value=keepCode;
+  $("lookup").value=r.sig||("#"+r.lfd);
+  $("oldNote").textContent=`Übernommen: Nr. ${r.lfd} der alten Liste.`;
+  $("flag").textContent=r.pruefen?`Unsicher gelesen: ${r.pruefen}`:"";
+  renderTag(); markDirty(); $("barcode").focus();
+}
+$("noOld").addEventListener("click",()=>{
+  if(dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+  const code=$("barcode").value; resetForm(); $("barcode").value=code; renderTag();
+  $("oldNote").textContent="Erfassung ohne alte Signatur."; field("hersteller").focus();
+});
+
+/* ================= Barcode ================= */
+$("barcode").addEventListener("input",()=>{renderTag();markDirty()});
+$("barcode").addEventListener("change",()=>checkCode($("barcode").value));
+$("barcode").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();checkCode($("barcode").value)}});
+function checkCode(code){
+  code=code.trim(); $("codeNote").textContent=""; if(!code) return;
+  const r=records[code];
+  if(r && code!==current.code){
+    if(confirm(`Barcode ${code} ist bereits vergeben (${r.altSig||"ohne alte Signatur"}, ${r.hersteller||"ohne Hersteller"}). Diesen Eintrag öffnen?`)) loadRecord(code);
+    else $("codeNote").textContent="Achtung: Dieser Barcode ist schon einer anderen Zither zugeordnet.";
+  } else if(!r) $("codeNote").textContent="Neuer Barcode.";
+}
+function setCode(code){$("barcode").value=code;renderTag();markDirty();checkCode(code)}
+let scanner=null;
+const noReader=()=>{$("codeNote").textContent="Der Barcode-Leser konnte nicht geladen werden. Code bitte eintippen."};
+$("scanBtn").addEventListener("click",async()=>{
+  if(scanner){await stopScan();return}
+  if(typeof Html5Qrcode==="undefined") return noReader();
+  scanner=new Html5Qrcode("reader",{verbose:false,experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
+  $("scanBtn").textContent="Stopp";
+  try{
+    await scanner.start({facingMode:"environment"},{fps:10,qrbox:(w,h)=>({width:Math.min(320,w*0.9),height:Math.min(160,h*0.5)})},
+      async text=>{await stopScan();setCode(text)},()=>{});
+  }catch(e){
+    await stopScan();
+    $("codeNote").textContent="Kamera nicht verfügbar oder nicht erlaubt. Kamerazugriff im Browser freigeben oder „Barcode aus Foto lesen“ nutzen.";
+  }
+});
+async function stopScan(){
+  if(!scanner) return;
+  try{ if(scanner.isScanning) await scanner.stop(); scanner.clear(); }catch(e){}
+  scanner=null; $("reader").innerHTML=""; $("scanBtn").textContent="Kamera";
+}
+$("barcodePhoto").addEventListener("change",async e=>{
+  const file=e.target.files[0]; e.target.value=""; if(!file) return;
+  if(typeof Html5Qrcode==="undefined") return noReader();
+  $("codeNote").textContent="Lese Barcode …";
+  const s=new Html5Qrcode("reader",{verbose:false});
+  try{ setCode(await s.scanFile(file,false)); }
+  catch(err){ $("codeNote").textContent="Im Foto wurde kein Barcode erkannt. Näher und gerade fotografieren oder Code eintippen."; }
+  finally{ try{s.clear()}catch(_){} $("reader").innerHTML=""; }
+});
+
+/* ================= Fotos ================= */
+async function photoSrc(id){
+  if(photoCache[id]) return photoCache[id];
+  const d=await apiGet({action:"photo",id});
+  return photoCache[id]=`data:${d.mime};base64,${d.data}`;
+}
+function renderPhotos(){
+  $("photos").innerHTML=current.fotos.map((f,i)=>`<figure><img data-pid="${esc(f.id)}" ${f.src?`src="${f.src}"`:""} alt="Foto ${i+1}"><button type="button" data-i="${i}" aria-label="Foto entfernen">×</button></figure>`).join("");
+  $("photos").querySelectorAll("img:not([src])").forEach(async img=>{
+    try{ img.src=await photoSrc(img.dataset.pid); }catch(e){ img.alt="Foto nicht ladbar"; }
+  });
+  $("photos").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
+    if(!confirm("Foto aus diesem Eintrag entfernen? Die Datei bleibt im Drive-Ordner.")) return;
+    current.fotos.splice(+b.dataset.i,1); renderPhotos(); markDirty();
+  }));
+}
+async function shrink(file){
+  const bmp=await createImageBitmap(file);
+  const max=1600, sc=Math.min(1,max/Math.max(bmp.width,bmp.height));
+  const c=document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
+  c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
+  return c.toDataURL("image/jpeg",0.82);
+}
+$("photoInput").addEventListener("change",async e=>{
+  const files=[...e.target.files]; e.target.value="";
+  if(!connected){$("photoHint").textContent="Keine Verbindung zur Tabelle – Fotos können nicht hochgeladen werden.";return}
+  for(const f of files){
+    $("photoHint").textContent="Lade Foto hoch …";
+    try{
+      const dataUrl=await shrink(f);
+      const code=$("barcode").value.trim()||"ohne-barcode";
+      const res=await apiPost({action:"upload",mime:"image/jpeg",name:`${code}_${Date.now()}.jpg`,data:dataUrl.split(",")[1]});
+      photoCache[res.id]=dataUrl; current.fotos.push({id:res.id,src:dataUrl});
+      renderPhotos(); markDirty();
+      $("photoHint").textContent="Foto hochgeladen. Zum Zuordnen „Speichern“ tippen.";
+    }catch(err){ $("photoHint").textContent="Foto konnte nicht hochgeladen werden: "+(err.message||err); }
+  }
+});
+
+/* ================= Laden, Speichern, Löschen ================= */
+function resetForm(){
+  current={code:null,fotos:[]};
+  writeForm({},false); $("barcode").value=""; $("lookup").value=""; $("results").innerHTML="";
+  ["oldNote","flag","codeNote"].forEach(i=>$(i).textContent="");
+  $("deleteBtn").hidden=true; renderPhotos(); renderTag();
+  dirty=false; $("saveMsg").textContent="Neue Erfassung";
+}
+function loadRecord(code){
+  const r=records[code]; if(!r) return;
+  current={code, fotos:(r.fotoIds||[]).map(id=>({id,src:photoCache[id]}))};
+  writeForm(r,false); $("barcode").value=r.barcode; $("lookup").value=r.altSig||"";
+  $("results").innerHTML=""; $("codeNote").textContent="";
+  $("oldNote").textContent=r.lfd?`Verknüpft mit Nr. ${r.lfd} der alten Liste.`:"";
+  const o=oldRows.find(x=>String(x.lfd)===String(r.lfd));
+  $("flag").textContent=o&&o.pruefen?`Unsicher gelesen (alte Liste): ${o.pruefen}`:"";
+  $("deleteBtn").hidden=false; renderPhotos(); renderTag();
+  dirty=false; $("saveMsg").textContent=`Gespeichert ${r.zeitstempel||""}`;
+  showTab("erfassen"); window.scrollTo({top:0});
+}
+$("saveBtn").addEventListener("click",async()=>{
+  const code=$("barcode").value.trim();
+  if(!code){$("saveMsg").textContent="Zum Speichern bitte zuerst den Barcode scannen oder eintippen.";$("barcode").focus();return}
+  if(!connected){$("saveMsg").textContent="Keine Verbindung zur Tabelle.";return}
+  const record={...readForm(), barcode:code, fotoIds:current.fotos.map(f=>f.id)};
+  let overwrite=false;
+  if(records[code] && code!==current.code){
+    if(!confirm(`Barcode ${code} gehört schon zu einem anderen Eintrag. Überschreiben?`)) return;
+    overwrite=true;
+  }
+  $("saveBtn").disabled=true; $("saveMsg").textContent="Speichere …";
+  try{
+    const res=await apiPost({action:"save",record,previousBarcode:current.code||"",overwrite});
+    if(res.conflict){$("saveMsg").textContent=res.error;return}
+    if(current.code && current.code!==code) delete records[current.code];
+    records[code]=res.record; current.code=code;
+    dirty=false; $("deleteBtn").hidden=false;
+    $("saveMsg").textContent=`Gespeichert: ${record.altSig||"ohne alte Signatur"} unter Barcode ${code}`;
+  }catch(err){ $("saveMsg").textContent="Speichern fehlgeschlagen: "+(err.message||err); }
+  finally{ $("saveBtn").disabled=false; }
+});
+$("newBtn").addEventListener("click",()=>{
+  if(dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+  resetForm(); $("lookup").focus();
+});
+$("deleteBtn").addEventListener("click",async()=>{
+  if(!current.code) return;
+  if(!confirm("Diesen Eintrag aus der Tabelle löschen? Fotos bleiben im Drive-Ordner, die alte Liste bleibt unverändert.")) return;
+  try{ await apiPost({action:"delete",barcode:current.code}); delete records[current.code]; resetForm(); $("saveMsg").textContent="Eintrag gelöscht"; }
+  catch(err){ $("saveMsg").textContent="Löschen fehlgeschlagen: "+(err.message||err); }
+});
+window.addEventListener("beforeunload",e=>{if(dirty){e.preventDefault();e.returnValue=""}});
+
+/* ================= Bestand ================= */
+function showTab(t){
+  ["erfassen","bestand","setup"].forEach(n=>{
+    $("view-"+n).hidden=n!==t; $("tab-"+n).setAttribute("aria-selected",n===t);
+  });
+  $("savebar").hidden=t!=="erfassen";
+  if(t==="bestand") renderList();
+}
+["erfassen","bestand","setup"].forEach(n=>$("tab-"+n).addEventListener("click",()=>showTab(n)));
+$("search").addEventListener("input",renderList);
+$("fDone").addEventListener("click",()=>{filterMode="done";renderList()});
+$("fOpen").addEventListener("click",()=>{filterMode="open";renderList()});
+function renderList(){
+  $("fDone").setAttribute("aria-pressed",filterMode==="done"); $("fOpen").setAttribute("aria-pressed",filterMode==="open");
+  $("fDone").classList.toggle("primary",filterMode==="done"); $("fOpen").classList.toggle("primary",filterMode==="open");
+  const doneLfd=new Set(Object.values(records).map(r=>String(r.lfd)).filter(Boolean));
+  const n=oldRows.filter(r=>doneLfd.has(String(r.lfd))).length;
+  $("progressBar").style.width=oldRows.length?(100*n/oldRows.length)+"%":"0";
+  $("progressLabel").textContent=`${n} von ${oldRows.length} Einträgen der alten Liste erfasst`;
+  $("progressText").textContent=`${Object.keys(records).length} Zithern insgesamt mit Barcode gespeichert.`;
+  const q=$("search").value.trim().toLowerCase();
+  const hit=o=>!q||Object.values(o).some(v=>typeof v==="string"&&v.toLowerCase().includes(q))||String(o.lfd)===q.replace("#","");
+  let html;
+  if(filterMode==="done"){
+    const items=Object.values(records).filter(hit).sort((a,b)=>String(a.altSig||"~").localeCompare(String(b.altSig||"~"),"de",{numeric:true})||(+a.lfd||9999)-(+b.lfd||9999));
+    html=items.map(r=>`<li><button type="button" data-code="${esc(r.barcode)}"><span class="ph"></span><span><span class="t">${esc(r.altSig||"ohne alte Signatur")}</span> <span class="m">Barcode ${esc(r.barcode)}</span><br>${esc(r.hersteller||"ohne Hersteller")}<br><span class="m">${esc(r.gattung||"Gattung offen")}${(r.fotoIds||[]).length?`, ${r.fotoIds.length} Foto${r.fotoIds.length>1?"s":""}`:", ohne Foto"}</span></span></button></li>`).join("")
+      || `<li class="hint">Noch keine Zither gespeichert. Im Reiter „Erfassen“ mit der alten Signatur beginnen.</li>`;
+  } else {
+    const items=oldRows.filter(r=>!doneLfd.has(String(r.lfd))&&hit(r));
+    html=items.map(r=>`<li><button type="button" data-lfd="${esc(r.lfd)}"><span class="ph"></span><span><span class="t">${esc(r.sig||"ohne Signatur")}</span> <span class="m">Nr. ${esc(r.lfd)}</span><br>${esc(r.hersteller||"ohne Hersteller")}<br><span class="m">${esc(r.gattung||"")}</span></span></button></li>`).join("")
+      || `<li class="hint">Alle Einträge der alten Liste sind erfasst.</li>`;
+  }
+  $("list").innerHTML=html;
+  $("list").querySelectorAll("button[data-code]").forEach(b=>b.addEventListener("click",()=>{
+    if(dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return; loadRecord(b.dataset.code)}));
+  $("list").querySelectorAll("button[data-lfd]").forEach(b=>b.addEventListener("click",()=>{
+    if(dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+    resetForm(); showTab("erfassen"); pickOld(oldRows.find(x=>String(x.lfd)===b.dataset.lfd)); window.scrollTo({top:0});
+  }));
+}
+
+/* ================= Export ================= */
+$("exportBtn").addEventListener("click",()=>{
+  const cols=[["zeitstempel","Zeitstempel"],["barcode","neue Signatur"],["altSig","Alte Signatur"],["hersteller","Hersteller"],["fabriknummer","Fabriknummer"],["baujahr","Baujahr"],["zustand","Zustand"],["beschaedigungen","Beschädigungen"],["saiten","Zustand der Saiten"],["koffer","Koffer"],["fotoIds","Foto"],["klang","Wie findet Sarah den Klang?"],["besonderheiten","Besonderheiten und Sonstiges"],["gattung","Gattung"],["mensur","Mensur"],["lfd","Lfd. Nr. (alt)"],["regal","Regal-Nr."],["regalort","Regalort"],["verkauf","Verkauf"],["kaufwert","Kaufwert (DM)"],["wert","tatsächlicher Wert (DM)"]];
+  const cell=v=>{v=v==null?"":String(v);return /[";\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+  const rows=Object.values(records).sort((a,b)=>String(a.altSig||"~").localeCompare(String(b.altSig||"~"),"de",{numeric:true}));
+  const csv="\ufeff"+[cols.map(c=>c[1]).join(";"),...rows.map(r=>cols.map(([k])=>cell(k==="fotoIds"?(r.fotoIds||[]).map(id=>"https://drive.google.com/file/d/"+id+"/view").join(" "):r[k])).join(";"))].join("\r\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download=`Zitherinventar_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+});
+
+/* ================= Start ================= */
+renderTag();
+loadAll();
+</script>
+</body>
+</html>
