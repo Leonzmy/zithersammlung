@@ -482,14 +482,55 @@ function beep(){
 }
 const gUM=video=>navigator.mediaDevices.getUserMedia({audio:false,video});
 
+/* Hauptkamera (1×) statt Weitwinkel wählen */
+async function mainBackCameraId(){
+  try{
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="videoinput"&&d.label);
+    const back=devs.filter(d=>/back|rear|rück|environment|hinten|facing back/i.test(d.label));
+    if(back.length<2) return null;            // nur eine Rückkamera: nichts zu wählen
+    const other=/ultra|tele|dual|triple|weitwinkel|wide|makro|macro|depth|tiefe/i;
+    const main=back.find(d=>!other.test(d.label));
+    return main?main.deviceId:null;
+  }catch(e){return null}
+}
+function normalizeZoom(stream){
+  // Kameras, die bei 0,5× beginnen (Android-Mehrfachkameras): auf 1× stellen
+  try{
+    const t=stream.getVideoTracks()[0], c=t.getCapabilities?t.getCapabilities():{};
+    if(c.zoom && c.zoom.min<1 && c.zoom.max>=1) t.applyConstraints({advanced:[{zoom:1}]}).catch(()=>{});
+  }catch(e){}
+}
+async function openBackStream(size){
+  const stop=st=>st&&st.getTracks().forEach(t=>t.stop());
+  const saved=store.get("zi.camId");
+  let stream=null;
+  if(saved){
+    try{ stream=await gUM({deviceId:{exact:saved},...size}); }catch(e){ store.set("zi.camId",""); }
+  }
+  if(!stream){
+    try{ stream=await gUM({facingMode:{ideal:"environment"},...size}); }
+    catch(e){ if(/NotAllowed|Permission/i.test(errText(e))) throw e; stream=await gUM({facingMode:"environment"}); }
+    const id=await mainBackCameraId();     // Gerätenamen gibt es erst nach der Freigabe
+    const cur=(stream.getVideoTracks()[0].getSettings()||{}).deviceId;
+    if(id && id!==cur){
+      stop(stream);
+      try{ stream=await gUM({deviceId:{exact:id},...size}); }
+      catch(e){ stream=await gUM({facingMode:{ideal:"environment"},...size}); }
+    }
+    const used=(stream.getVideoTracks()[0].getSettings()||{}).deviceId;
+    if(id && used===id) store.set("zi.camId",id);
+  }
+  normalizeZoom(stream);
+  return stream;
+}
+
 async function startScan(){
   if(scanStream||scanStarting) return;
   scanStarting=true; closeCam(); lastRead=""; readCount=0;
   $("scanBtn").textContent="Stopp"; $("codeNote").textContent="Kamera startet …";
   try{
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error("Dieser Browser erlaubt keinen Kamerazugriff");
-    try{ scanStream=await gUM({facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}); }
-    catch(e){ if(/NotAllowed|Permission/i.test(errText(e))) throw e; scanStream=await gUM({facingMode:"environment"}); }
+    scanStream=await openBackStream({width:{ideal:1920},height:{ideal:1080}});
     const v=$("scanVideo"); v.srcObject=scanStream; $("scanView").hidden=false;
     try{ await v.play(); }catch(e){}
     detector=await makeDetector();
@@ -638,7 +679,7 @@ async function openCam(){
     $("photoHint").textContent="Dieser Browser erlaubt keinen Kamerazugriff. „Aus Galerie wählen“ nutzen."; return;
   }
   try{
-    camStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1440}}});
+    camStream=await openBackStream({width:{ideal:1920},height:{ideal:1440}});
     const v=$("camVideo"); v.srcObject=camStream;
     $("cam").hidden=false; $("camBtn").textContent="Kamera schließen";
     await v.play();
