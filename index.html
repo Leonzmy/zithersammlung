@@ -298,19 +298,36 @@ const store={
 };
 const cfg=()=>({url:store.get("zi.url")||DEFAULT_API_URL, token:store.get("zi.token")});
 
+// Anfrage mit Zeitlimit; zeigt Googles Fehlerseite lesbar an, statt still zu hängen
+async function apiFetch(url,opts,ms=60000){
+  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),ms);
+  let res,text;
+  try{
+    res=await fetch(url,{...opts,signal:ctl.signal});
+    text=await res.text();
+  }catch(e){
+    throw new Error(e.name==="AbortError"
+      ?`Zeitüberschreitung: Die Tabelle hat nach ${ms/1000} s nicht geantwortet.`
+      :"Netzwerkfehler. Internetverbindung prüfen.");
+  }finally{ clearTimeout(timer); }
+  try{ return JSON.parse(text); }
+  catch(e){
+    const msg=text.replace(/<(style|script|title)[\s\S]*?<\/\1>/gi," ").replace(/<[^>]+>/g," ")
+      .replace(/&nbsp;/g," ").replace(/\s+/g," ").trim().slice(0,240);
+    throw new Error(`Google meldet (HTTP ${res.status}): ${msg||"leere Antwort"}`);
+  }
+}
 async function apiGet(params){
   const {url,token}=cfg();
   const q=new URLSearchParams({...params,token});
-  const res=await fetch(url+"?"+q.toString());
-  const data=await res.json();
+  const data=await apiFetch(url+"?"+q.toString());
   if(data.error) throw new Error(data.error);
   return data;
 }
 async function apiPost(body){
   const {url,token}=cfg();
   // text/plain vermeidet den CORS-Preflight, den Apps Script nicht beantwortet
-  const res=await fetch(url,{method:"POST",body:JSON.stringify({...body,token})});
-  const data=await res.json();
+  const data=await apiFetch(url,{method:"POST",body:JSON.stringify({...body,token})});
   if(data.error && !data.conflict) throw new Error(data.error);
   return data;
 }
@@ -649,7 +666,7 @@ async function shrink(file){
 }
 let uploads=0;
 async function uploadDataUrl(dataUrl){
-  if(!connected){$("photoHint").textContent="Keine Verbindung zur Tabelle – Fotos können nicht hochgeladen werden. Reiter „Verbindung“ prüfen.";return}
+  if(!cfg().url||!cfg().token){$("photoHint").textContent="Keine Verbindung eingerichtet – Fotos können nicht hochgeladen werden. Reiter „Verbindung“ prüfen.";return}
   uploads++; $("photoHint").textContent=uploads>1?`Lade ${uploads} Fotos hoch …`:"Lade Foto hoch …";
   try{
     const code=$("barcode").value.trim()||"ohne-barcode";
@@ -727,7 +744,7 @@ function loadRecord(code){
 $("saveBtn").addEventListener("click",async()=>{
   const code=$("barcode").value.trim();
   if(!code){$("saveMsg").textContent="Zum Speichern bitte zuerst den Barcode scannen oder eintippen.";$("barcode").focus();return}
-  if(!connected){$("saveMsg").textContent="Keine Verbindung zur Tabelle.";return}
+  if(!cfg().url||!cfg().token){$("saveMsg").textContent="Keine Verbindung eingerichtet. Reiter „Verbindung“ prüfen.";return}
   const record={...readForm(), barcode:code, fotoIds:current.fotos.map(f=>f.id)};
   let overwrite=false;
   if(records[code] && code!==current.code){
@@ -742,7 +759,7 @@ $("saveBtn").addEventListener("click",async()=>{
     records[code]=res.record; current.code=code;
     dirty=false; $("deleteBtn").hidden=false;
     $("saveMsg").textContent=`Gespeichert: ${record.altSig||"ohne alte Signatur"} unter Barcode ${code}`;
-  }catch(err){ $("saveMsg").textContent="Speichern fehlgeschlagen: "+(err.message||err); }
+  }catch(err){ $("saveMsg").textContent="Speichern fehlgeschlagen: "+(err.message||err)+" Die Angaben bleiben im Formular, einfach erneut „Speichern“ tippen."; }
   finally{ $("saveBtn").disabled=false; }
 });
 $("newBtn").addEventListener("click",()=>{
